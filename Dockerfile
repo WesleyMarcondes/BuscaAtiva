@@ -17,4 +17,4 @@ COPY . .
 EXPOSE 8080
 
 # Comando para ligar o servidor
-CMD [ "npm", "start" ]
+CMD ["npm", "run", "start"]
