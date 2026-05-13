@@ -1,0 +1,23 @@
+# Dependências instaladas
+node_modules/
+
+# Cache e build do Next.js
+.next/
+
+# Variáveis de ambiente sensíveis
+.env
+.env.local
+.env.production
+
+# Arquivos do sistema
+.DS_Store
+*.log
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentação (não necessária em produção)
+docs/
+README.md
