@@ -1,7 +1,7 @@
 # ================================================
 # STAGE 1: Builder - Instala dependências e compila
 # ================================================
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copia os arquivos de manifesto de dependências
@@ -19,7 +19,7 @@ RUN npm run build
 # ================================================
 # STAGE 2: Runner - Imagem final leve para produção
 # ================================================
-FROM node:18-alpine AS runner
+FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV production
