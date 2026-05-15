@@ -128,6 +128,7 @@ const initialClasses = ['1º Ano A', '1º Ano B', '2º Ano A', '3º Ano A', '4º
 export default function BuscaAtivaPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('Ausentes');
   const [viewType, setViewType] = useState('Alunos');
   const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
@@ -204,9 +205,10 @@ export default function BuscaAtivaPage() {
     return end >= now;
   };
 
-  // Load data from SQLite on mount
+  // Load data from Supabase on mount
   useEffect(() => {
     const loadData = async () => {
+      let loadError: string | null = null;
       try {
         // Load settings
         const [logoRes, iconRes, unitRes] = await Promise.all([
@@ -220,33 +222,28 @@ export default function BuscaAtivaPage() {
         if (unitRes.value) setUnitName(unitRes.value);
 
         const response = await fetch('/api/students');
-        const data = await response.json();
-        
-        // Check if the response came from Supabase or SQLite via header
-        const dbSource = response.headers.get('x-db-source') as 'supabase' | 'sqlite';
-        
-        if (response.ok) {
-          setDbStatus(dbSource || 'sqlite');
-        } else {
-          setDbStatus('sqlite'); 
+
+        // Verifica status HTTP antes de processar o body
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}));
+          throw new Error(errBody?.error || `Erro HTTP ${response.status} ao carregar alunos.`);
         }
 
-        if (data && data.length > 0) {
-          setStudents(data);
-        } else {
-          // If DB is empty, use initial data and save it
-          setStudents(initialStudents);
-          await fetch('/api/students', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(initialStudents),
-          });
-        }
+        const data = await response.json();
+
+        // Check if the response came from Supabase via header
+        const dbSource = response.headers.get('x-db-source') as 'supabase' | 'sqlite';
+        setDbStatus(dbSource || 'supabase');
+
+        // Banco respondeu com sucesso — usa os dados reais (pode ser array vazio)
+        setStudents(Array.isArray(data) ? data : []);
+
       } catch (error) {
         console.error('Error loading data:', error);
-        setStudents(initialStudents);
+        loadError = error instanceof Error ? error.message : 'Erro desconhecido ao conectar com o banco de dados.';
       } finally {
         setIsLoading(false);
+        if (loadError) setDbError(loadError);
       }
     };
     loadData();
@@ -776,6 +773,23 @@ export default function BuscaAtivaPage() {
         accept=".xlsx, .xls, .csv" 
         className="hidden" 
       />
+      {/* Error Banner */}
+      {dbError && (
+        <div className="flex items-start gap-3 bg-red-50 border border-red-200 text-red-800 rounded-2xl px-5 py-4 shadow-sm">
+          <AlertTriangle className="w-5 h-5 mt-0.5 shrink-0 text-red-500" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm">Falha na conexão com o banco de dados</p>
+            <p className="text-xs mt-0.5 text-red-600 break-words">{dbError}</p>
+          </div>
+          <button
+            onClick={() => setDbError(null)}
+            className="shrink-0 text-red-400 hover:text-red-600 transition-colors"
+            aria-label="Fechar"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {/* Header */}
       <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 md:gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6">

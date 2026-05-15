@@ -11,7 +11,7 @@ export async function GET() {
       .order('name');
 
     if (error) {
-      console.error('Supabase error loading students:', error);
+      console.error('Supabase error loading students:', JSON.stringify(error));
       return NextResponse.json({ error: 'Failed to load students' }, { status: 500 });
     }
 
