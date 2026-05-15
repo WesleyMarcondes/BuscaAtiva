@@ -33,7 +33,7 @@ export async function POST(request: Request) {
       .upsert(students, { onConflict: 'id' });
 
     if (error) {
-      console.error('Supabase error saving students:', error);
+      console.error('Supabase POST error:', JSON.stringify(error));
       return NextResponse.json({ error: 'Failed to save students' }, { status: 500 });
     }
 
