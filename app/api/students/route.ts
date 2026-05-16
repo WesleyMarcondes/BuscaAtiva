@@ -28,9 +28,12 @@ export async function POST(request: Request) {
   try {
     const students = await request.json();
 
+    // Remove 'initials' — campo calculado no frontend, não existe na tabela do Supabase
+    const studentsToSave = students.map(({ initials, ...s }: { initials?: string; [key: string]: unknown }) => s);
+
     const { error } = await supabase
       .from('students')
-      .upsert(students, { onConflict: 'id' });
+      .upsert(studentsToSave, { onConflict: 'id' });
 
     if (error) {
       console.error('Supabase POST error:', JSON.stringify(error));
