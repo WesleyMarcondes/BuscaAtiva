@@ -236,7 +236,20 @@ export default function BuscaAtivaPage() {
         setDbStatus(dbSource || 'supabase');
 
         // Banco respondeu com sucesso — usa os dados reais (pode ser array vazio)
-        setStudents(Array.isArray(data) ? data : []);
+        const loadedStudents = Array.isArray(data) ? data : [];
+
+        if (loadedStudents.length > 0) {
+          setStudents(loadedStudents);
+        } else {
+          // Banco vazio: popula com dados iniciais (primeiro deploy ou banco zerado)
+          console.log('Banco vazio — populando com dados iniciais...');
+          setStudents(initialStudents);
+          fetch('/api/students', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(initialStudents),
+          }).catch(e => console.error('Erro ao popular banco com dados iniciais:', e));
+        }
 
       } catch (error) {
         console.error('Error loading data:', error);
@@ -249,7 +262,7 @@ export default function BuscaAtivaPage() {
     loadData();
   }, []);
 
-  // Save data to SQLite whenever students change
+  // Persiste alterações de alunos no Supabase
   const saveStudents = async (updatedStudents: Student[]) => {
     try {
       await fetch('/api/students', {
