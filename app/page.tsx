@@ -210,11 +210,21 @@ export default function BuscaAtivaPage() {
     const loadData = async () => {
       let loadError: string | null = null;
       try {
-        // Load settings
+        // Load settings (verifica response.ok antes de processar)
+        const [logoR, iconR, unitR] = await Promise.all([
+          fetch('/api/settings?key=custom_logo'),
+          fetch('/api/settings?key=custom_phone_icon'),
+          fetch('/api/settings?key=unit_name'),
+        ]);
+
+        if (!logoR.ok) console.error('Erro ao carregar logo do Supabase: HTTP', logoR.status);
+        if (!iconR.ok) console.error('Erro ao carregar ícone de telefone do Supabase: HTTP', iconR.status);
+        if (!unitR.ok) console.error('Erro ao carregar nome da unidade do Supabase: HTTP', unitR.status);
+
         const [logoRes, iconRes, unitRes] = await Promise.all([
-          fetch('/api/settings?key=custom_logo').then(r => r.json()),
-          fetch('/api/settings?key=custom_phone_icon').then(r => r.json()),
-          fetch('/api/settings?key=unit_name').then(r => r.json())
+          logoR.json().catch(() => ({ value: null })),
+          iconR.json().catch(() => ({ value: null })),
+          unitR.json().catch(() => ({ value: null })),
         ]);
 
         if (logoRes.value) setCustomLogo(logoRes.value);
@@ -265,11 +275,15 @@ export default function BuscaAtivaPage() {
   // Persiste alterações de alunos no Supabase
   const saveStudents = async (updatedStudents: Student[]) => {
     try {
-      await fetch('/api/students', {
+      const res = await fetch('/api/students', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedStudents),
       });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        console.error('Erro ao salvar alunos no Supabase:', errBody?.error || `HTTP ${res.status}`);
+      }
     } catch (error) {
       console.error('Error saving students:', error);
     }
@@ -475,6 +489,12 @@ export default function BuscaAtivaPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ studentId: student.id, date: attendanceDate }),
+            }).then(async (res) => {
+              if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                console.error(`Erro ao registrar falta do aluno ${student.id} no Supabase:`, errBody?.error || `HTTP ${res.status}`);
+              }
+              return res;
             })
           );
         }
@@ -720,11 +740,15 @@ export default function BuscaAtivaPage() {
           const compressedResult = canvas.toDataURL('image/png'); // Using png to preserve transparency
           setCustomLogo(compressedResult);
           
-          await fetch('/api/settings', {
+          const logoSaveRes = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ key: 'custom_logo', value: compressedResult })
           });
+          if (!logoSaveRes.ok) {
+            const errBody = await logoSaveRes.json().catch(() => ({}));
+            console.error('Erro ao salvar logo no Supabase:', errBody?.error || `HTTP ${logoSaveRes.status}`);
+          }
           setLogoError(false);
         }
       };
@@ -763,11 +787,15 @@ export default function BuscaAtivaPage() {
           const compressedResult = canvas.toDataURL('image/png');
           setCustomPhoneIcon(compressedResult);
           
-          await fetch('/api/settings', {
+          const iconSaveRes = await fetch('/api/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ key: 'custom_phone_icon', value: compressedResult })
           });
+          if (!iconSaveRes.ok) {
+            const errBody = await iconSaveRes.json().catch(() => ({}));
+            console.error('Erro ao salvar ícone de telefone no Supabase:', errBody?.error || `HTTP ${iconSaveRes.status}`);
+          }
         }
       };
       img.src = result;
@@ -892,6 +920,11 @@ export default function BuscaAtivaPage() {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ key: 'unit_name', value: newName })
+                    }).then(async (res) => {
+                      if (!res.ok) {
+                        const errBody = await res.json().catch(() => ({}));
+                        console.error('Erro ao salvar nome da unidade no Supabase:', errBody?.error || `HTTP ${res.status}`);
+                      }
                     });
                   }
                 }}
