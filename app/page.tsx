@@ -194,6 +194,8 @@ export default function BuscaAtivaPage() {
   const [announcementTarget, setAnnouncementTarget] = useState<'Todos' | 'Turma'>('Todos');
   const [announcementClass, setAnnouncementClass] = useState('');
   const [announcementStudent, setAnnouncementStudent] = useState<number | 'Todos'>('Todos');
+  const [isDuplicatesModalOpen, setIsDuplicatesModalOpen] = useState(false);
+  const [duplicateCandidates, setDuplicateCandidates] = useState<{ name: string; students: Student[] }[]>([]);
 
   const isStudentInAtestado = (student: Student) => {
     if (!student.atestado_end_date) return false;
@@ -454,27 +456,32 @@ export default function BuscaAtivaPage() {
     return students.filter(s => s.class === selectedClass);
   }, [selectedClass, students]);
 
-  const toggleAbsence = (id: number) => {
-    setAbsentStudents(prev => 
+  const toggleAbsence = (student: Student) => {
+    if (isStudentInAtestado(student)) return; // Atestado ativo — falta bloqueada
+    const id = student.id;
+    setAbsentStudents(prev =>
       prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
     );
   };
 
   const handleConfirmAttendance = async () => {
     const classStudentIds = students.filter(s => s.class === selectedClass).map(s => s.id);
-    const selectedAbsences = studentsInSelectedClass.filter(s => absentStudents.includes(s.id));
-    
-    // Track promises to await them
+
+    // Bug 1: alunos de atestado ativo não recebem falta
+    const atestadoIds = new Set(
+      studentsInSelectedClass.filter(s => isStudentInAtestado(s)).map(s => s.id)
+    );
+    const effectiveAbsentIds = absentStudents.filter(id => !atestadoIds.has(id));
+    const blockedByAtestado = absentStudents.filter(id => atestadoIds.has(id));
+
     const absencePromises: Promise<Response>[] = [];
 
-    // Update students status based on attendance
     const updatedStudents = students.map(student => {
       if (student.class === selectedClass) {
-        const isAbsent = absentStudents.includes(student.id);
+        const isAbsent = effectiveAbsentIds.includes(student.id);
         const newConsecutive = isAbsent ? (student.consecutive || 0) + 1 : 0;
         const newTotalAbsences = isAbsent ? (student.absences || 0) + 1 : (student.absences || 0);
-        
-        // Automatic status classification logic
+
         let newStatus = 'Presente';
         if (newConsecutive >= 3 || newTotalAbsences > 15) {
           newStatus = 'Crítico';
@@ -482,7 +489,6 @@ export default function BuscaAtivaPage() {
           newStatus = 'Ausente';
         }
 
-        // Record absence in DB if it's a new one
         if (isAbsent) {
           absencePromises.push(
             fetch('/api/absences', {
@@ -499,17 +505,11 @@ export default function BuscaAtivaPage() {
           );
         }
 
-        return {
-          ...student,
-          status: newStatus,
-          absences: newTotalAbsences,
-          consecutive: newConsecutive
-        };
+        return { ...student, status: newStatus, absences: newTotalAbsences, consecutive: newConsecutive };
       }
       return student;
     });
 
-    // Await all absences to be recorded
     if (absencePromises.length > 0) {
       setIsLoading(true);
       await Promise.all(absencePromises);
@@ -518,13 +518,14 @@ export default function BuscaAtivaPage() {
 
     setStudents(updatedStudents);
     await saveStudents(updatedStudents);
-
-    // Reset notified status for this class as it's a new attendance record
     setNotifiedIds(prev => prev.filter(id => !classStudentIds.includes(id)));
-
     setIsAttendanceModalOpen(false);
     setAbsentStudents([]);
-    alert(`Chamada da turma ${selectedClass} realizada com sucesso para o dia ${new Date(attendanceDate + 'T12:00:00').toLocaleDateString('pt-BR')}!`);
+
+    const blockedMsg = blockedByAtestado.length > 0
+      ? ` (${blockedByAtestado.length} aluno(s) com atestado ignorado(s))`
+      : '';
+    alert(`Chamada da turma ${selectedClass} realizada com sucesso para o dia ${new Date(attendanceDate + 'T12:00:00').toLocaleDateString('pt-BR')}!${blockedMsg}`);
   };
 
   // Reset all notifications if the date changes (simulating a new day of work)
@@ -678,15 +679,34 @@ export default function BuscaAtivaPage() {
         if (newStudents.length > 0) {
           setStudents(newStudents);
           await saveStudents(newStudents);
-          
+
           if (mode === 'reset') {
-            // If reset, also clear absences table in DB
-            await fetch('/api/absences', { method: 'DELETE' });
+            // Bug 2: verificar response.ok no DELETE
+            const deleteRes = await fetch('/api/absences', { method: 'DELETE' });
+            if (!deleteRes.ok) {
+              const errBody = await deleteRes.json().catch(() => ({}));
+              console.error('Erro ao zerar histórico de faltas no Supabase:', errBody?.error || `HTTP ${deleteRes.status}`);
+            }
           }
 
-          setImportStatus({ 
-            type: 'success', 
-            message: mode === 'update' 
+          // Bug 3: detectar duplicados (mesmo nome em turmas diferentes)
+          const nameMap = new Map<string, Student[]>();
+          newStudents.forEach(s => {
+            const key = s.name.toLowerCase().trim();
+            if (!nameMap.has(key)) nameMap.set(key, []);
+            nameMap.get(key)!.push(s);
+          });
+          const duplicates = Array.from(nameMap.values())
+            .filter(group => group.length > 1 && new Set(group.map(s => s.class)).size > 1)
+            .map(group => ({ name: group[0].name, students: group }));
+          if (duplicates.length > 0) {
+            setDuplicateCandidates(duplicates);
+            setIsDuplicatesModalOpen(true);
+          }
+
+          setImportStatus({
+            type: 'success',
+            message: mode === 'update'
               ? `Sucesso! ${newStudents.length} alunos atualizados (Histórico mantido).`
               : `Sucesso! Nova base de ${newStudents.length} alunos criada (Histórico zerado).`
           });
@@ -1490,38 +1510,59 @@ export default function BuscaAtivaPage() {
                   
                   <div className="grid grid-cols-1 gap-2">
                     {studentsInSelectedClass.length > 0 ? (
-                      studentsInSelectedClass.map(student => (
-                        <button
-                          key={student.id}
-                          onClick={() => toggleAbsence(student.id)}
-                          className={`flex items-center justify-between p-4 rounded-2xl border transition-all text-left ${
-                            absentStudents.includes(student.id)
-                              ? 'bg-[#FFF5F5] border-[#FED7D7] shadow-sm'
-                              : 'bg-white border-gray-100 hover:border-gray-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all ${
-                              absentStudents.includes(student.id)
-                                ? 'bg-[#E53E3E] border-[#E53E3E] text-white'
-                                : 'bg-gray-50 border-gray-100 text-gray-400'
-                            }`}>
-                              <User className="w-4 h-4" />
+                      studentsInSelectedClass.map(student => {
+                        const inAtestado = isStudentInAtestado(student);
+                        const isMarkedAbsent = absentStudents.includes(student.id);
+                        return (
+                          <button
+                            key={student.id}
+                            onClick={() => toggleAbsence(student)}
+                            disabled={inAtestado}
+                            className={`flex items-center justify-between p-4 rounded-2xl border transition-all text-left ${
+                              inAtestado
+                                ? 'bg-purple-50/50 border-purple-100 cursor-not-allowed opacity-70'
+                                : isMarkedAbsent
+                                ? 'bg-[#FFF5F5] border-[#FED7D7] shadow-sm'
+                                : 'bg-white border-gray-100 hover:border-gray-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all ${
+                                inAtestado
+                                  ? 'bg-purple-100 border-purple-200 text-purple-400'
+                                  : isMarkedAbsent
+                                  ? 'bg-[#E53E3E] border-[#E53E3E] text-white'
+                                  : 'bg-gray-50 border-gray-100 text-gray-400'
+                              }`}>
+                                <User className="w-4 h-4" />
+                              </div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className={`text-sm font-bold ${
+                                  inAtestado ? 'text-purple-400' : isMarkedAbsent ? 'text-[#E53E3E]' : 'text-gray-700'
+                                }`}>
+                                  {student.name}
+                                </span>
+                                {inAtestado && (
+                                  <span className="px-2 py-0.5 bg-purple-100 text-purple-600 text-[9px] font-bold rounded-full border border-purple-200">
+                                    Atestado
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <span className={`text-sm font-bold ${absentStudents.includes(student.id) ? 'text-[#E53E3E]' : 'text-gray-700'}`}>
-                              {student.name}
-                            </span>
-                          </div>
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all ${
-                            absentStudents.includes(student.id)
-                              ? 'bg-[#E53E3E] border-[#E53E3E]'
-                              : 'border-gray-200'
-                          }`}>
-                            {absentStudents.includes(student.id) && <X className="text-white w-3 h-3 font-bold" />}
-                          </div>
-                        </button>
-                      ))
+                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all flex-shrink-0 ${
+                              inAtestado
+                                ? 'border-purple-200 bg-purple-50'
+                                : isMarkedAbsent
+                                ? 'bg-[#E53E3E] border-[#E53E3E]'
+                                : 'border-gray-200'
+                            }`}>
+                              {isMarkedAbsent && !inAtestado && <X className="text-white w-3 h-3" />}
+                            </div>
+                          </button>
+                        );
+                      })
                     ) : (
+
                       <div className="py-12 text-center space-y-2">
                         <Users className="w-12 h-12 text-gray-200 mx-auto" />
                         <p className="text-sm text-gray-400 font-medium">Nenhum aluno encontrado para esta turma.</p>
@@ -2259,6 +2300,82 @@ export default function BuscaAtivaPage() {
                     Confirmar Reset
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Duplicates Modal */}
+      <AnimatePresence>
+        {isDuplicatesModalOpen && (
+          <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-amber-100"
+            >
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-amber-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="bg-amber-500 p-2 rounded-lg">
+                    <AlertTriangle className="text-white w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900">Alunos Duplicados Detectados</h2>
+                    <p className="text-xs text-gray-500 font-medium">
+                      {duplicateCandidates.length} nome(s) aparecem em mais de uma turma
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setIsDuplicatesModalOpen(false)} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+                  <X className="w-5 h-5 text-gray-400" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4 max-h-[55vh] overflow-y-auto">
+                <p className="text-xs text-gray-500 font-medium leading-relaxed">
+                  Os alunos abaixo possuem o mesmo nome em turmas diferentes. Isso pode indicar erro de digitação na planilha. Remova de uma turma ou mantenha todos.
+                </p>
+                {duplicateCandidates.map((dup) => (
+                  <div key={dup.name} className="bg-amber-50 border border-amber-100 rounded-2xl p-4 space-y-3">
+                    <p className="text-sm font-black text-gray-800">{dup.name}</p>
+                    <div className="space-y-2">
+                      {dup.students.map((s) => (
+                        <div key={`${s.id}-${s.class}`} className="flex items-center justify-between bg-white border border-gray-100 rounded-xl px-4 py-2.5">
+                          <div>
+                            <span className="text-xs font-bold text-gray-700">{s.class}</span>
+                            <span className="ml-2 text-[10px] text-gray-400">{s.responsible || '—'}</span>
+                          </div>
+                          <button
+                            onClick={() => {
+                              const updated = students.filter(st => !(st.name.toLowerCase() === s.name.toLowerCase() && st.class === s.class));
+                              setStudents(updated);
+                              saveStudents(updated);
+                              setDuplicateCandidates(prev =>
+                                prev.map(d =>
+                                  d.name.toLowerCase() === dup.name.toLowerCase()
+                                    ? { ...d, students: d.students.filter(x => x.class !== s.class) }
+                                    : d
+                                ).filter(d => new Set(d.students.map(x => x.class)).size > 1)
+                              );
+                            }}
+                            className="px-3 py-1 bg-red-50 text-red-500 border border-red-100 text-[10px] font-bold rounded-lg hover:bg-red-100 transition-colors"
+                          >
+                            Remover desta turma
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="p-6 border-t border-gray-100 bg-gray-50/50">
+                <button
+                  onClick={() => setIsDuplicatesModalOpen(false)}
+                  className="w-full px-4 py-3 bg-[#2D8A61] rounded-xl text-sm font-bold text-white hover:bg-[#246D4D] transition-all shadow-sm"
+                >
+                  Manter Todos e Fechar
+                </button>
               </div>
             </motion.div>
           </div>
