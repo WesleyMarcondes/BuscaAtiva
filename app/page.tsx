@@ -191,10 +191,13 @@ export default function BuscaAtivaPage() {
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
-        console.error('Erro ao salvar alunos no Supabase:', errBody?.error || `HTTP ${res.status}`);
+        const errMsg = errBody?.error || `HTTP ${res.status}`;
+        console.error('Erro ao salvar alunos no Supabase (Response Error):', errMsg);
+        throw new Error(errMsg);
       }
     } catch (error) {
-      console.error('Error saving students:', error);
+      console.error('Erro ao salvar alunos no Supabase (Connection Error):', error);
+      throw error;
     }
   };
 
@@ -584,17 +587,43 @@ export default function BuscaAtivaPage() {
         }).filter(s => s.name && s.class);
 
         if (newStudents.length > 0) {
-          setStudents(newStudents);
-          await saveStudents(newStudents);
-
+          console.log(`[processFile] Iniciando importação no modo: ${mode}. Qtd de alunos parsed: ${newStudents.length}`);
+          
           if (mode === 'reset') {
-            // Bug 2: verificar response.ok no DELETE
-            const deleteRes = await fetch('/api/absences', { method: 'DELETE' });
+            console.log('[processFile] Modo reset: Limpando toda a base de dados (alunos e faltas)...');
+            const deleteRes = await fetch('/api/students?id=all', { method: 'DELETE' });
             if (!deleteRes.ok) {
               const errBody = await deleteRes.json().catch(() => ({}));
-              console.error('Erro ao zerar histórico de faltas no Supabase:', errBody?.error || `HTTP ${deleteRes.status}`);
+              const errMsg = errBody?.error || `HTTP ${deleteRes.status}`;
+              console.error('[processFile] Erro ao limpar base de alunos no Supabase:', errMsg);
+              throw new Error(`Falha ao limpar base anterior: ${errMsg}`);
+            }
+            console.log('[processFile] Base de dados limpa com sucesso.');
+          }
+
+          if (mode === 'update') {
+            // Modo update: deletar alunos que não estão mais na planilha (comparar IDs)
+            const newStudentIds = new Set(newStudents.map(ns => ns.id));
+            const dropouts = students.filter(s => !newStudentIds.has(s.id));
+            
+            if (dropouts.length > 0) {
+              console.log(`[processFile] Modo update: Detectados ${dropouts.length} alunos desistentes. Removendo do banco...`);
+              for (const student of dropouts) {
+                console.log(`[processFile] Removendo aluno desistente: ${student.name} (ID: ${student.id})`);
+                const deleteRes = await fetch(`/api/students?id=${student.id}`, { method: 'DELETE' });
+                if (!deleteRes.ok) {
+                  const errBody = await deleteRes.json().catch(() => ({}));
+                  console.error(`[processFile] Erro ao remover aluno desistente ${student.name} (ID: ${student.id}):`, errBody?.error || `HTTP ${deleteRes.status}`);
+                }
+              }
+              console.log('[processFile] Remoção de alunos desistentes concluída.');
             }
           }
+
+          console.log('[processFile] Gravando novos/atualizados alunos no Supabase...');
+          await saveStudents(newStudents);
+          setStudents(newStudents);
+          console.log('[processFile] Gravação concluída com sucesso no Supabase.');
 
           // Bug 3: detectar duplicados (mesmo nome em turmas diferentes)
           const nameMap = new Map<string, Student[]>();
@@ -627,10 +656,10 @@ export default function BuscaAtivaPage() {
           });
         }
       } catch (err) {
-        console.error('Erro ao processar arquivo:', err);
+        console.error('[processFile] Erro ao processar arquivo:', err);
         setImportStatus({ 
           type: 'error', 
-          message: 'Erro crítico ao ler o arquivo.' 
+          message: err instanceof Error ? `Erro: ${err.message}` : 'Erro crítico ao ler o arquivo.' 
         });
       }
     };

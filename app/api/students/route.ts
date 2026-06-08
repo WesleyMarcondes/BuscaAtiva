@@ -51,22 +51,46 @@ export async function DELETE(request: Request) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
 
-  if (!id) {
-    return NextResponse.json({ error: 'Student ID is required' }, { status: 400 });
-  }
-
   try {
-    const { error: error1 } = await supabase.from('students').delete().eq('id', id);
-    const { error: error2 } = await supabase.from('absences').delete().eq('student_id', id);
+    if (id === 'all') {
+      console.log('API: Clearing all database records (absences and students)...');
+      // Delete absences first to avoid foreign key violation
+      const { error: errorAbs } = await supabase.from('absences').delete().neq('id', 0);
+      if (errorAbs) {
+        console.error('Supabase error clearing absences table:', JSON.stringify(errorAbs));
+        return NextResponse.json({ error: 'Failed to clear absences table: ' + errorAbs.message }, { status: 500 });
+      }
 
-    if (error1 || error2) {
-      console.error('Supabase error deleting student:', error1 || error2);
-      return NextResponse.json({ error: 'Failed to delete student' }, { status: 500 });
+      const { error: errorStu } = await supabase.from('students').delete().neq('id', 0);
+      if (errorStu) {
+        console.error('Supabase error clearing students table:', JSON.stringify(errorStu));
+        return NextResponse.json({ error: 'Failed to clear students table: ' + errorStu.message }, { status: 500 });
+      }
+
+      console.log('API: Database cleared successfully.');
+      return NextResponse.json({ success: true });
+    }
+
+    if (!id) {
+      return NextResponse.json({ error: 'Student ID is required' }, { status: 400 });
+    }
+
+    // Delete specific student - delete absences first to avoid foreign key issues
+    const { error: errorAbs } = await supabase.from('absences').delete().eq('student_id', id);
+    if (errorAbs) {
+      console.error(`Supabase error deleting student ${id} absences:`, JSON.stringify(errorAbs));
+      return NextResponse.json({ error: 'Failed to delete student absences: ' + errorAbs.message }, { status: 500 });
+    }
+
+    const { error: errorStu } = await supabase.from('students').delete().eq('id', id);
+    if (errorStu) {
+      console.error(`Supabase error deleting student ${id} from table:`, JSON.stringify(errorStu));
+      return NextResponse.json({ error: 'Failed to delete student from table: ' + errorStu.message }, { status: 500 });
     }
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('Error deleting student:', error);
-    return NextResponse.json({ error: 'Failed to delete student' }, { status: 500 });
+    console.error('Error in DELETE handler:', error);
+    return NextResponse.json({ error: 'Internal server error deleting student' }, { status: 500 });
   }
 }
